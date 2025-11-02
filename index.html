@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Modi Bird</title>
+<style>
+  html,body { height:100%; margin:0; }
+  body {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background: linear-gradient(to bottom, #4ec0ca, #70c5ce 40%, #aee7f0);
+    overflow:hidden;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+  canvas { display:block; background:transparent; }
+  #retryBtn {
+    position:absolute;
+    z-index:10;
+    padding:12px 22px;
+    font-size:18px;
+    font-weight:700;
+    border-radius:10px;
+    border:none;
+    box-shadow:0 4px rgba(0,0,0,0.15);
+    cursor:pointer;
+    display:none;
+    background:#ffcc00;
+    left:50%;
+    transform:translateX(-50%);
+  }
+  #retryBtn:hover { background:#ffdd33; }
+  #hud {
+    position:absolute;
+    top:14px;
+    left:14px;
+    z-index:9;
+    font-size:20px;
+    color:#082;
+    text-shadow:0 1px rgba(255,255,255,0.6);
+    font-weight:700;
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<button id="retryBtn">Retry</button>
+<div id="hud"></div>
+
+<script>
+const canvas=document.getElementById('gameCanvas');
+const ctx=canvas.getContext('2d',{alpha:false});
+const retryBtn=document.getElementById('retryBtn');
+const hud=document.getElementById('hud');
+
+let W=800,H=600;
+function resize(){
+  const dpr=window.devicePixelRatio||1;
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  canvas.width=Math.floor(W*dpr); canvas.height=Math.floor(H*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize',resize,{passive:true});
+
+// === LOAD IMAGES ===
+const birdImg = new Image();
+birdImg.src = 'bird.png';
+const bgImg = new Image();
+bgImg.src = 'background.png';
+
+// === LOAD SOUND ===
+const hitSound = new Audio('hit.wav');
+hitSound.volume = 0.8;
+
+// === GAME STATE ===
+let bird,pipes,frame,score,highScore,isGameOver,rafId;
+const gravity=0.45,flapStrength=-9,pipeGap=230,pipeSpeed=3.2,spawnInterval=110;
+const BIRD_W=48, BIRD_H=36;
+const PIPE_W=90;
+let bgX=0;
+
+// === PIPE DRAW ===
+function drawPipe(x,topHeight){
+  const bottomY=topHeight+pipeGap;
+  const grad = ctx.createLinearGradient(x,0,x+PIPE_W,0);
+  grad.addColorStop(0,'#2b8c2b');
+  grad.addColorStop(0.2,'#3fa93f');
+  grad.addColorStop(0.5,'#5dd65d');
+  grad.addColorStop(0.8,'#3fa93f');
+  grad.addColorStop(1,'#2b8c2b');
+  ctx.fillStyle=grad;
+  ctx.fillRect(x,0,PIPE_W,topHeight);
+  ctx.fillRect(x,bottomY,PIPE_W,H-bottomY);
+  ctx.fillStyle='rgba(0,0,0,0.2)';
+  ctx.fillRect(x,topHeight-2,PIPE_W,2);
+  ctx.fillRect(x,bottomY,PIPE_W,2);
+}
+
+// === CORE ===
+function initState(){
+  bird={x:W*0.25,y:H*0.5,w:BIRD_W,h:BIRD_H,vy:0};
+  pipes=[];frame=0;score=0;isGameOver=false;bgX=0;
+  highScore=parseInt(localStorage.getItem('flappyHighScore'))||0;
+  hud.textContent=`Score: 0  |  High: ${highScore}`;
+  retryBtn.style.display='none';
+}
+
+function rectIntersect(ax,ay,aw,ah,bx,by,bw,bh){
+  return ax<bx+bw&&ax+aw>bx&&ay<by+bh&&ay+ah>by;
+}
+
+function spawnPipe(){
+  const min=80,max=Math.max(150,H-pipeGap-120);
+  const topY=Math.floor(Math.random()*(max-min+1))+min;
+  pipes.push({x:W+40,width:PIPE_W,topBottomY:topY,passed:false});
+}
+
+function drawBackground(){
+  if(!bgImg.complete) return;
+  const scale = H / bgImg.height;
+  const imgW = bgImg.width * scale;
+  const imgH = H;
+  bgX -= pipeSpeed * 0.5;
+  if(bgX <= -imgW) bgX = 0;
+  ctx.drawImage(bgImg, bgX, 0, imgW, imgH);
+  ctx.drawImage(bgImg, bgX + imgW, 0, imgW, imgH);
+}
+
+function draw(){
+  drawBackground();
+  pipes.forEach(p=> drawPipe(p.x,p.topBottomY));
+  ctx.save();
+  ctx.translate(bird.x+bird.w/2,bird.y+bird.h/2);
+  const ang=Math.max(-0.6,Math.min(0.9,bird.vy*0.03));
+  ctx.rotate(ang);
+  ctx.drawImage(birdImg,-bird.w/2,-bird.h/2,bird.w,bird.h);
+  ctx.restore();
+}
+
+function update(){
+  bird.vy+=gravity;bird.y+=bird.vy;
+  if(frame%spawnInterval===0)spawnPipe();
+  for(let i=pipes.length-1;i>=0;i--){
+    const p=pipes[i];p.x-=pipeSpeed;
+    if(!p.passed&&p.x+p.width<bird.x){
+      p.passed=true;score++;
+      if(score>highScore){highScore=score;localStorage.setItem('flappyHighScore',highScore);}
+      hud.textContent=`Score: ${score}  |  High: ${highScore}`;
+    }
+    const topBox={x:p.x,y:0,w:p.width,h:p.topBottomY};
+    const bottomBox={x:p.x,y:p.topBottomY+pipeGap,w:p.width,h:H-(p.topBottomY+pipeGap)};
+    if(rectIntersect(bird.x,bird.y,bird.w,bird.h,topBox.x,topBox.y,topBox.w,topBox.h)||
+       rectIntersect(bird.x,bird.y,bird.w,bird.h,bottomBox.x,bottomBox.y,bottomBox.w,bottomBox.h)){
+      if(!isGameOver) hitSound.play();
+      isGameOver=true;
+    }
+    if(p.x+p.width<-100)pipes.splice(i,1);
+  }
+  if(bird.y+bird.h>H||bird.y<-20){
+    if(!isGameOver) hitSound.play();
+    isGameOver=true;
+  }
+  frame++;
+}
+
+function loop(){
+  if(isGameOver){
+    draw();
+    ctx.fillStyle='rgba(0,0,0,0.45)';ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff';ctx.font='48px Arial';ctx.textAlign='center';
+    ctx.fillText('Game Over!',W/2,H/2-20);
+    ctx.font='26px Arial';ctx.fillText(`Score: ${score}  |  High: ${highScore}`,W/2,H/2+22);
+    retryBtn.style.display='block';retryBtn.style.top=(H/2+70)+'px';
+    return;
+  }
+  update();draw();
+  rafId=requestAnimationFrame(loop);
+}
+
+function flap(){if(!isGameOver) bird.vy=flapStrength;}
+function onKey(e){if(e.code==='Space'||e.key===' '){e.preventDefault();if(isGameOver)restart();else flap();}}
+function onClick(){if(isGameOver)restart();else flap();}
+function restart(){initState();cancelAnimationFrame(rafId);loop();}
+function waitForImages(imgs,cb){let n=imgs.length;imgs.forEach(i=>{i.complete?(--n===0&&cb()):(i.onload=()=>{--n===0&&cb();});});}
+function startGame(){
+  resize();initState();
+  document.addEventListener('keydown',onKey);
+  document.addEventListener('click',onClick);
+  document.addEventListener('touchstart',onClick,{passive:true});
+  retryBtn.addEventListener('click',restart);
+  loop();
+}
+waitForImages([birdImg,bgImg],()=>{resize();startGame();});
+</script>
+
+
+</body>
+</html>
